@@ -1,0 +1,17 @@
+{
+  "name": "snake-arena",
+  "version": "1.0.0",
+  "description": "Real-time multiplayer snake battle in the browser. Last snake slithering wins.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}

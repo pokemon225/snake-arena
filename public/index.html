@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0f14">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="description" content="Real-time multiplayer snake battle in your browser. Create a room, share the code, last snake slithering wins.">
+  <title>Snake Arena</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐍</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=Inter:wght@400;600;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- HOME -->
+  <section id="home" class="screen active">
+    <div class="card hero">
+      <h1 class="logo">SNAKE<br><span>ARENA</span></h1>
+      <p class="tagline">Real-time multiplayer snake. Last snake slithering wins.</p>
+      <label class="field">
+        <span>Your name</span>
+        <input id="nameInput" maxlength="12" placeholder="e.g. Viper" autocomplete="off">
+      </label>
+      <button id="createBtn" class="btn primary">Create room</button>
+      <div class="divider"><span>or join a friend</span></div>
+      <div class="join-row">
+        <input id="codeInput" maxlength="4" placeholder="CODE" autocomplete="off" autocapitalize="characters">
+        <button id="joinBtn" class="btn">Join</button>
+      </div>
+      <p id="homeError" class="error" role="alert"></p>
+    </div>
+    <div class="card rules" id="rulesHome"></div>
+  </section>
+
+  <!-- LOBBY -->
+  <section id="lobby" class="screen">
+    <div class="card">
+      <p class="label">Room code</p>
+      <div class="code-row">
+        <div id="lobbyCode" class="room-code">----</div>
+        <button id="copyBtn" class="btn small">Copy invite link</button>
+      </div>
+      <p class="hint">Send the link (or the code) to friends — they can join from any phone or computer.</p>
+      <p class="label">Players <span id="playerCount"></span></p>
+      <ul id="playerList" class="player-list"></ul>
+      <button id="addBotBtn" class="btn small wide">+ Add bot</button>
+      <div class="lobby-actions">
+        <button id="readyBtn" class="btn primary">I'm ready</button>
+        <button id="startBtn" class="btn primary">Start match</button>
+        <p id="lobbyHint" class="hint center"></p>
+      </div>
+      <button id="leaveBtn" class="btn ghost">Leave room</button>
+    </div>
+
+    <div class="col">
+      <div class="card">
+        <p class="label">Your snake</p>
+        <canvas id="lookPreview" class="look-preview" width="360" height="72"></canvas>
+        <div id="colorPicker" class="swatches" role="radiogroup" aria-label="Color"></div>
+        <div id="skinPicker" class="segmented" role="radiogroup" aria-label="Pattern"></div>
+      </div>
+      <div class="card">
+        <p class="label">Match settings <span id="settingsNote" class="note"></span></p>
+        <div class="setting"><span>Rounds to win</span><div class="segmented" id="setWins"></div></div>
+        <div class="setting"><span>Arena size</span><div class="segmented" id="setArena"></div></div>
+        <div class="setting"><span>Walls close after</span><div class="segmented" id="setShrink"></div></div>
+      </div>
+    </div>
+    <div class="card rules" id="rulesLobby"></div>
+  </section>
+
+  <!-- GAME -->
+  <section id="game" class="screen">
+    <header class="hud">
+      <div class="hud-left">
+        <span class="pill" id="hudCode">----</span>
+        <span class="pill" id="hudRound">Round 1</span>
+        <span class="pill ping" id="hudPing" title="Connection latency">-- ms</span>
+      </div>
+      <div class="hud-center" id="hudStatus"></div>
+      <div class="hud-right">
+        <button class="icon-btn" id="soundBtn" aria-label="Toggle sound" title="Sound">🔊</button>
+        <button class="icon-btn" id="fullBtn" aria-label="Full screen" title="Full screen">⛶</button>
+        <button class="icon-btn" id="helpBtn" aria-label="Show rules" title="Rules">?</button>
+      </div>
+    </header>
+    <div class="game-body">
+      <div class="stage" id="stage">
+        <canvas id="canvas"></canvas>
+        <div id="effects" class="effects"></div>
+        <div id="banner" class="banner hidden"></div>
+        <div id="overlay" class="overlay hidden"></div>
+        <div id="feed" class="feed"></div>
+        <button id="boostBtn" class="boost-btn">BOOST</button>
+      </div>
+      <aside class="scoreboard">
+        <p class="label">First to <span id="winsTo">3</span> round wins</p>
+        <ul id="scoreList"></ul>
+      </aside>
+    </div>
+  </section>
+
+  <!-- RULES MODAL -->
+  <div id="rulesModal" class="modal hidden">
+    <div class="card rules" id="rulesModalBody"></div>
+  </div>
+
+  <template id="rulesTpl">
+    <h2>How to play</h2>
+    <ol class="rule-list">
+      <li><b>Steer in any direction:</b> Your snake follows your mouse pointer. Keys work too (arrows / WASD, combine two for diagonals). On a phone, drag anywhere on the screen like a joystick. Your snake never stops moving.</li>
+      <li><b>Boost:</b> Hold the mouse button, Space, or the BOOST button to go almost twice as fast — but boosting burns your length.</li>
+      <li><b>Grow:</b> Eat glowing orbs. <span class="orb-dot"></span> small, <span class="orb-dot gold"></span> gold = big growth.</li>
+      <li><b>Don't crash:</b> If your <u>head</u> touches a wall, another snake's body, or another snake's head, you're out for the round. You can safely cross your own body.</li>
+      <li><b>Power-ups:</b> <span class="pw magnet">Magnet</span> pulls nearby orbs to you (8s). <span class="pw ghost">Ghost</span> lets you pass through snakes (4s). <span class="pw shield">Shield</span> saves you from one snake crash.</li>
+      <li><b>Cut them off:</b> When a snake dies it bursts into orbs. Swing your body in front of a rival to make them crash into you.</li>
+      <li><b>Sudden death:</b> After a while the walls close in. Anything caught in the wall gets chopped off.</li>
+      <li><b>Win:</b> Last snake alive wins the round. First to the target number of round wins takes the match.</li>
+    </ol>
+    <p class="hint">2–8 players. Add bots in the lobby to practice or fill the arena. If your connection drops, you have 30 seconds to come back — autopilot steers for you meanwhile.</p>
+  </template>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="game.js"></script>
+</body>
+</html>

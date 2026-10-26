@@ -1,0 +1,53 @@
+# 🐍 Snake Arena
+
+Real-time multiplayer snake you play in the browser, on any device. Create a room, share the 4-letter code or invite link, and battle until one snake is left. Add bots to practice or fill the arena.
+
+## How to play
+- **Steer in any direction:** Your snake follows your mouse pointer. Arrow keys / WASD also work, and you can combine two for diagonals. On phones, drag anywhere like a joystick.
+- **Boost:** Hold the mouse button, Space, or the BOOST button. It's faster but burns length.
+- **Grow:** Eat orbs. Gold orbs give a lot more.
+- **Don't crash:** If your head touches a wall, another snake's body, or another snake's head, you're out of the round. Crossing your own body is safe.
+- **Power-ups:**
+  - **Magnet** pulls nearby orbs to you (8s).
+  - **Ghost** lets you pass through snakes (4s).
+  - **Shield** saves you from one snake crash.
+- **Sudden death:** After a while (30/60/90s, set by the host) the walls close in.
+- **Win:** Last snake alive wins the round. First to 1/3/5 round wins (set by the host) takes the match.
+
+## Features
+- 2–8 players per room. Join by code or invite link. Bots can fill the empty slots.
+- **Lobby:** pick your color and pattern (solid, stripes, dots, neon), and ready up. The host chooses the rounds to win, the arena size, and when the walls close.
+- **Reconnect:** if you refresh or lose connection, you get your seat back within 30 seconds. Autopilot steers your snake while you're gone.
+- **Smooth over real networks:** your own snake is predicted locally, other snakes are interpolated, and the server only sends the orbs that changed.
+- **Camera and minimap:** the camera follows your snake, and a minimap shows every rival. Arrows at the screen edge point to snakes that are off-camera.
+- **Game feel:** particles, screen shake on KOs, "+N" popups, and sounds with a mute button.
+- **Match stats:** wins, KOs, longest snake, survival time, and awards.
+- **Devices:** works on desktop, phone portrait, and phone landscape, with a full-screen button.
+
+## Run locally
+Requires Node.js 18+.
+```bash
+npm install
+npm start
+# open http://localhost:3000
+```
+To test multiplayer, open a second browser window (or a phone on the same Wi-Fi at `http://<your-computer-ip>:3000`).
+
+## Deploy (Render, free)
+1. Push this repo to GitHub.
+2. On [render.com](https://render.com) choose **New → Blueprint** and pick the repo (it reads `render.yaml`).
+3. Render gives you a public URL like `https://snake-arena-xxxx.onrender.com`. Share it.
+
+The free plan sleeps after inactivity, so the first visit can take ~30s to wake up.
+
+## How it works
+- `server.js`: Express + Socket.IO. The server is authoritative.
+  - **Simulation:** a fixed-timestep loop at 20 ticks/s. Snakes move at any angle with a limited turn rate, and bodies follow the head point by point.
+  - **Collisions** use a spatial hash.
+  - **Bots** look ahead for danger, including where rival heads are about to be, then hunt orbs, grab power-ups, and sometimes cut across smaller rivals.
+  - **Network updates** send orbs as changes only and every other body point.
+- `public/game.js`: canvas renderer and client logic.
+  - **Movement:** your own snake is predicted locally; other snakes are interpolated using the measured update interval.
+  - **Screen:** follow camera, minimap, particles, popups.
+  - **Pages:** lobby UI.
+  - **Input:** mouse, keyboard, and touch joystick.
