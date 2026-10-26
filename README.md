@@ -1,5 +1,7 @@
 # 🐍 Snake Arena
 
+![Snake Arena](docs/cover.png)
+
 Real-time multiplayer snake you play in the browser, on any device. Create a room, share the 4-letter code or invite link, and battle until one snake is left. Add bots to practice or fill the arena.
 
 ## How to play
