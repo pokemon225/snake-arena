@@ -15,7 +15,7 @@ Real-time multiplayer snake you play in the browser, on any device. Create a roo
 - **Win:** Last snake alive wins the round. First to 1/3/5 round wins (set by the host) takes the match.
 
 ## Features
-- 2–8 players per room. Join by code or invite link. Bots can fill the empty slots.
+- 2–8 players per room. Join by code or invite link. Bots (Easy / Normal / Hard) can fill the empty slots.
 - **Lobby:** pick your color and pattern (solid, stripes, dots, neon), and ready up. The host chooses the rounds to win, the arena size, and when the walls close.
 - **Reconnect:** if you refresh or lose connection, you get your seat back within 30 seconds. Autopilot steers your snake while you're gone.
 - **Smooth over real networks:** your own snake is predicted locally, other snakes are interpolated, and the server only sends the orbs that changed.
@@ -44,7 +44,11 @@ The free plan sleeps after inactivity, so the first visit can take ~30s to wake 
 - `server.js`: Express + Socket.IO. The server is authoritative.
   - **Simulation:** a fixed-timestep loop at 20 ticks/s. Snakes move at any angle with a limited turn rate, and bodies follow the head point by point.
   - **Collisions** use a spatial hash.
-  - **Bots** look ahead for danger, including where rival heads are about to be, then hunt orbs, grab power-ups, and sometimes cut across smaller rivals.
+  - **Bots** come in three skill levels, set per bot in the lobby:
+    - **Easy** is a simple reactive steerer.
+    - **Normal** and **Hard** are planners. They simulate about 20 possible paths under the real turn-rate limit and check walls (including where the closing walls will be), bodies, and exactly when each rival head will reach each point. They flood-fill to measure free space so they avoid traps, plan cut-offs, and boost on purpose to escape or attack.
+    - **Hard** thinks twice as often and plans further ahead.
+    - In 3v3 tournaments (round wins): Normal beat Easy 15–3, Hard beat Easy 10–1, and Hard beat Normal 8–4.
   - **Network updates** send orbs as changes only and every other body point.
 - `public/game.js`: canvas renderer and client logic.
   - **Movement:** your own snake is predicted locally; other snakes are interpolated using the measured update interval.

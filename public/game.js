@@ -248,6 +248,7 @@ $('copyBtn').onclick = async () => {
   setTimeout(() => { $('copyBtn').textContent = 'Copy invite link'; }, 1500);
 };
 
+const BOT_SKILLS = ['easy', 'normal', 'hard'];
 const SKIN_LABELS = { solid: 'Solid', stripes: 'Stripes', dots: 'Dots', neon: 'Neon' };
 const ARENA_LABELS = { small: 'Small', medium: 'Medium', large: 'Large' };
 
@@ -270,7 +271,17 @@ function renderLobby() {
   $('playerList').replaceChildren(...state.players.map((p) => {
     const tags = [];
     if (p.id === state.hostId) tags.push(el('span', { className: 'tag host', textContent: 'host' }));
-    if (p.bot) tags.push(el('span', { className: 'tag bot', textContent: 'bot' }));
+    if (p.bot) {
+      const label = `bot · ${p.skill}`;
+      tags.push(host
+        ? el('button', {
+          className: `tag bot skill ${p.skill}`,
+          textContent: label,
+          title: 'Click to change difficulty',
+          onclick: () => socket.emit('botSkill', { id: p.id, skill: BOT_SKILLS[(BOT_SKILLS.indexOf(p.skill) + 1) % BOT_SKILLS.length] }),
+        })
+        : el('span', { className: `tag bot ${p.skill}`, textContent: label }));
+    }
     else if (!p.connected) tags.push(el('span', { className: 'tag off', textContent: 'offline' }));
     else if (p.id !== state.hostId) tags.push(el('span', { className: `tag ${p.ready ? 'ready' : ''}`, textContent: p.ready ? 'ready ✓' : 'not ready' }));
     if (p.bot && host) tags.push(el('button', { className: 'x-btn', textContent: '✕', title: 'Remove bot', onclick: () => socket.emit('removeBot', p.id) }));
@@ -1128,8 +1139,11 @@ function draw(now) {
 
   // Orbs
   const pulse = 0.85 + 0.15 * Math.sin(now / 200);
+  // Hide orbs my (predicted) head is touching right away, instead of waiting for the server to confirm
+  const eatR2 = (R + cfg.orbR + 4) ** 2;
   for (const [x, y, v] of orbs.values()) {
     if (x < vx0 || x > vx1 || y < vy0 || y > vy1) continue;
+    if (myHead && (x - myHead[0]) ** 2 + (y - myHead[1]) ** 2 < eatR2) continue;
     const gold = v >= 6;
     const tiny = v <= 1;
     ctx.fillStyle = gold ? '#ffd23f' : '#9effc8';

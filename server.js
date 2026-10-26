@@ -102,7 +102,8 @@ function createRoom() {
     simTime: 0,
     orbs: new Map(), // id -> {x, y, v}
     nextOrbId: 1,
-    orbAdds: new Map(), // orbs created/moved since the last broadcast
+    orbAdds: new Map(), // orbs created or moved since the last broadcast
+    orbNew: new Set(), // ids created since the last broadcast (clients haven't seen them yet)
     orbDels: [], // orb ids removed since the last broadcast
     orbsReset: false,
     powerups: [],
@@ -116,7 +117,7 @@ function createRoom() {
   return room;
 }
 
-function newPlayer(room, { name, isBot = false }) {
+function newPlayer(room, { name, isBot = false, skill = 'normal' }) {
   const used = new Set([...room.players.values()].map((p) => p.color));
   return {
     token: isBot ? `bot-${newId()}` : newId(), // secret, identifies a human across reconnects
@@ -125,6 +126,7 @@ function newPlayer(room, { name, isBot = false }) {
     connected: true,
     disconnectedAt: 0,
     isBot,
+    skill: isBot ? skill : null,
     name: cleanName(name),
     color: COLORS.find((c) => !used.has(c)) || COLORS[room.players.size % COLORS.length],
     skin: isBot ? SKINS[Math.floor(Math.random() * SKINS.length)] : 'solid',
@@ -165,18 +167,31 @@ function addOrb(room, x, y, v) {
   const o = { x, y, v };
   room.orbs.set(id, o);
   room.orbAdds.set(id, o);
+  room.orbNew.add(id);
+}
+
+// Orbs pulled by a magnet: resend their position
+function moveOrb(room, id, o) {
+  room.orbAdds.set(id, o);
 }
 
 function removeOrb(room, id) {
   room.orbs.delete(id);
-  if (room.orbAdds.has(id)) room.orbAdds.delete(id);
+  room.orbAdds.delete(id);
+  // Only an orb created since the last broadcast is unknown to clients; every other removal must be sent
+  if (room.orbNew.has(id)) room.orbNew.delete(id);
   else room.orbDels.push(id);
+}
+
+function resetOrbDeltas(room) {
+  room.orbAdds = new Map();
+  room.orbNew = new Set();
+  room.orbDels = [];
 }
 
 function clearOrbs(room) {
   room.orbs = new Map();
-  room.orbAdds = new Map();
-  room.orbDels = [];
+  resetOrbDeltas(room);
   room.orbsReset = true;
 }
 
@@ -335,7 +350,9 @@ function nearby(grid, x, y, fn) {
 const intangible = (p) => p.ghost > 0 || p.invuln > 0;
 
 // ---- Bots (also used as autopilot for players who are reconnecting) ----
-function danger(room, grid, self, x, y, heads) {
+// Easy: a simple reactive steerer. Normal/Hard: a planner that simulates possible paths.
+
+function easyDanger(room, grid, self, x, y, heads) {
   if (!inBounds(room.bounds, x, y, 18)) return true;
   const r2 = (RADIUS * 2 + 6) ** 2;
   // Where rival heads are now and are about to be
@@ -347,7 +364,7 @@ function danger(room, grid, self, x, y, heads) {
   return nearby(grid, x, y, (px, py, owner) => owner !== self && owner.ghost <= 0 && dist2(x, y, px, py) < r2);
 }
 
-function botThink(room, grid, p) {
+function botThinkEasy(room, grid, p) {
   const [hx, hy] = p.body[0];
   const rivals = alivePlayers(room).filter((q) => q !== p && q.ghost <= 0);
   const heads = rivals.map((q) => [q.body[0][0], q.body[0][1], q.angle]);
@@ -388,7 +405,7 @@ function botThink(room, grid, p) {
     const a = p.angle + k * 0.28;
     let score = Math.cos(wrapAngle(want - a)) * 3 - Math.abs(k) * 0.04;
     for (const d of [18, 40, 70, 110, 160]) {
-      if (danger(room, grid, p, hx + Math.cos(a) * d, hy + Math.sin(a) * d, heads)) {
+      if (easyDanger(room, grid, p, hx + Math.cos(a) * d, hy + Math.sin(a) * d, heads)) {
         score -= (200 - d) * 2;
         if (k === 0) safeAhead = false;
         break;
@@ -403,6 +420,252 @@ function botThink(room, grid, p) {
   else p.boost = safeAhead && Math.random() < 0.93;
 }
 
+// ---- Planner bots (Normal / Hard) ----
+const SKILLS = {
+  easy: null,
+  normal: { every: 2, horizon: 12, attack: 0.04, foodRush: false },
+  hard: { every: 1, horizon: 20, attack: 0.15, foodRush: true },
+};
+const BOT_SKILLS = Object.keys(SKILLS);
+const OCC = 20; // cell size of the coarse free-space grid
+const SPACE_CAP = 320; // cells counted by the free-space flood fill
+const REL_ANGLES = [0, -0.15, 0.15, -0.3, 0.3, -0.5, 0.5, -0.75, 0.75, -1, 1, -1.3, 1.3, -1.7, 1.7, -2.2, 2.2, -2.8, 2.8];
+
+// Shared per-tick view of the world that every planner bot reads
+function botWorld(room, grid) {
+  const cols = Math.ceil(room.w / OCC) + 1;
+  const rows = Math.ceil(room.h / OCC) + 1;
+  const occ = new Uint8Array(cols * rows); // 1 = blocked by a snake body
+  const snakes = [];
+  for (const q of room.players.values()) {
+    if (!q.alive) continue;
+    const speed = q.boosting ? BOOST_SPEED : SPEED;
+    snakes.push({ p: q, x: q.body[0][0], y: q.body[0][1], dx: Math.cos(q.angle), dy: Math.sin(q.angle), speed, len: q.body.length });
+    if (intangible(q)) continue;
+    for (const [x, y] of q.body) {
+      const c = Math.floor(x / OCC);
+      const r = Math.floor(y / OCC);
+      if (c >= 0 && r >= 0 && c < cols && r < rows) occ[r * cols + c] = 1;
+    }
+  }
+  const orbGrid = new Map();
+  for (const o of room.orbs.values()) {
+    const k = Math.floor(o.x / GRID) * 4096 + Math.floor(o.y / GRID);
+    let cell = orbGrid.get(k);
+    if (!cell) orbGrid.set(k, (cell = []));
+    cell.push(o);
+  }
+  return { grid, occ, cols, rows, snakes, orbGrid };
+}
+
+// Where the walls will be `ticks` ticks from now (they stop at the minimum arena size)
+function futureBounds(room, ticks) {
+  const b = room.bounds;
+  const over = Math.max(0, room.tick + ticks - Math.max(room.tick, shrinkAtTicks(room)));
+  const s = SHRINK_SPEED * DT * over;
+  const sx = Math.min(s, Math.max(0, (b.x1 - b.x0 - MIN_ARENA_W) / 2));
+  const sy = Math.min(s, Math.max(0, (b.y1 - b.y0 - MIN_ARENA_H) / 2));
+  return { x0: b.x0 + sx, y0: b.y0 + sy, x1: b.x1 - sx, y1: b.y1 - sy };
+}
+
+// Simulates steering toward `target` for `steps` ticks under the real turn-rate limit.
+// Returns how many ticks it stays safe (steps + 1 = safe the whole way), where it ends up and food collected.
+function simulate(room, world, p, target, speed, steps) {
+  let [x, y] = p.body[0];
+  let a = p.angle;
+  let food = 0;
+  const maxTurn = TURN_RATE * DT;
+  const bodyR2 = (RADIUS * 2) ** 2;
+  const eatR2 = (RADIUS + ORB_R + 4) ** 2;
+  const eaten = new Set();
+  for (let s = 1; s <= steps; s++) {
+    a = wrapAngle(a + Math.max(-maxTurn, Math.min(maxTurn, wrapAngle(target - a))));
+    x += Math.cos(a) * speed * DT;
+    y += Math.sin(a) * speed * DT;
+    const t = s * DT;
+    if (!inBounds(futureBounds(room, s), x, y, RADIUS + 3)) return { ttc: s, x, y, a, food };
+    const ghostNow = p.ghost > s || p.invuln > s;
+    if (!ghostNow) {
+      // Snake bodies as they are now
+      const hit = nearby(world.grid, x, y, (bx, by, owner, i) => owner !== p && i > 0 && !intangible(owner) && dist2(x, y, bx, by) < bodyR2);
+      if (hit) return { ttc: s, x, y, a, food };
+      // Rival heads: dangerous if they reach this spot before (or about when) we do
+      for (const e of world.snakes) {
+        if (e.p === p || intangible(e.p)) continue;
+        const rx = x - e.x;
+        const ry = y - e.y;
+        const along = rx * e.dx + ry * e.dy;
+        if (along < -RADIUS * 2) continue;
+        const perp = Math.abs(rx * e.dy - ry * e.dx);
+        if (perp > RADIUS * 2.6) continue;
+        if (Math.max(0, along) / e.speed <= t + 0.2) return { ttc: s, x, y, a, food };
+      }
+    }
+    // Orbs picked up along the way
+    const cell = world.orbGrid.get(Math.floor(x / GRID) * 4096 + Math.floor(y / GRID));
+    if (cell) for (const o of cell) if (!eaten.has(o) && dist2(x, y, o.x, o.y) < eatR2) { eaten.add(o); food += o.v; }
+  }
+  return { ttc: steps + 1, x, y, a, food };
+}
+
+// Free space reachable from (x, y): a capped flood fill over the coarse grid. Small = we're boxed in.
+function freeSpace(room, world, x, y, ticksAhead) {
+  const { occ, cols } = world;
+  const fb = futureBounds(room, ticksAhead + 40);
+  const c0 = Math.floor(fb.x0 / OCC) + 1;
+  const c1 = Math.floor(fb.x1 / OCC) - 1;
+  const r0 = Math.floor(fb.y0 / OCC) + 1;
+  const r1 = Math.floor(fb.y1 / OCC) - 1;
+  const sc = Math.floor(x / OCC);
+  const sr = Math.floor(y / OCC);
+  if (sc < c0 || sc > c1 || sr < r0 || sr > r1) return 0;
+  const seen = new Set([sr * cols + sc]);
+  const queue = [sr * cols + sc];
+  for (let qi = 0; qi < queue.length && seen.size < SPACE_CAP; qi++) {
+    const k = queue[qi];
+    const c = k % cols;
+    const r = (k - c) / cols;
+    for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nc = c + dc;
+      const nr = r + dr;
+      if (nc < c0 || nc > c1 || nr < r0 || nr > r1) continue;
+      const nk = nr * cols + nc;
+      if (seen.has(nk) || occ[nk]) continue;
+      seen.add(nk);
+      queue.push(nk);
+    }
+  }
+  return Math.min(1, seen.size / SPACE_CAP);
+}
+
+// Can we get in front of a rival's head before it arrives? Returns the best cut-off point.
+function findIntercept(world, p, hx, hy) {
+  if (p.body.length < 30) return null; // need length to spare: a cut-off costs boost
+  let best = null;
+  for (const e of world.snakes) {
+    if (e.p === p || intangible(e.p) || e.len < 15) continue;
+    if (dist2(hx, hy, e.x, e.y) > 480 ** 2) continue;
+    for (const lead of [55, 90, 140]) {
+      const px = e.x + e.dx * lead;
+      const py = e.y + e.dy * lead;
+      const turn = Math.abs(wrapAngle(Math.atan2(py - hy, px - hx) - p.angle)) / TURN_RATE;
+      const ours = Math.hypot(px - hx, py - hy) / BOOST_SPEED + turn;
+      const theirs = lead / e.speed;
+      if (ours + 0.2 < theirs) {
+        const value = e.len / (ours + 0.3);
+        if (!best || value > best.value) best = { x: px, y: py, value, prey: e.p };
+        break;
+      }
+    }
+  }
+  return best;
+}
+
+// Where is the best food? Big orbs, clusters, power-ups; skip things a rival will reach first.
+function findFood(room, world, p, hx, hy) {
+  let best = null;
+  const range = p.magnet > 0 ? 700 : 550;
+  const rivalCloser = (x, y, d) => world.snakes.some((e) => e.p !== p && dist2(e.x, e.y, x, y) < (d * 0.6) ** 2);
+  for (const o of room.orbs.values()) {
+    const d = Math.hypot(o.x - hx, o.y - hy);
+    if (d > range) continue;
+    const value = o.v / (d + 60);
+    if (best && value <= best.value) continue;
+    if (rivalCloser(o.x, o.y, d)) continue;
+    best = { x: o.x, y: o.y, value };
+  }
+  for (const u of room.powerups) {
+    const d = Math.hypot(u.x - hx, u.y - hy);
+    const value = 10 / (d + 60);
+    if (d < range && (!best || value > best.value) && !rivalCloser(u.x, u.y, d)) best = { x: u.x, y: u.y, value };
+  }
+  return best;
+}
+
+function botThinkPlanner(room, world, p, skill) {
+  const [hx, hy] = p.body[0];
+  const cfg = SKILLS[skill];
+  const steps = cfg.horizon;
+
+  // 1. Pick a goal: cut off a rival if we can, otherwise food, otherwise the arena centre
+  if (p.attackUntil > room.tick && p.attack && !p.attack.prey.alive) p.attack = null;
+  if (!(p.attackUntil > room.tick && p.attack) && Math.random() < cfg.attack) {
+    const cut = findIntercept(world, p, hx, hy);
+    p.attack = cut;
+    if (cut) p.attackUntil = room.tick + 30;
+  }
+  if (p.attack && p.attackUntil > room.tick) {
+    // Refresh the cut-off point as the prey moves
+    const e = world.snakes.find((s) => s.p === p.attack.prey);
+    if (e) { p.attack.x = e.x + e.dx * 90; p.attack.y = e.y + e.dy * 90; }
+  }
+  const attacking = p.attack && p.attackUntil > room.tick;
+  const food = attacking ? null : findFood(room, world, p, hx, hy);
+  const cx = (room.bounds.x0 + room.bounds.x1) / 2;
+  const cy = (room.bounds.y0 + room.bounds.y1) / 2;
+  const goal = attacking ? p.attack : food || { x: cx, y: cy };
+  const goalW = attacking ? 45 : food ? 25 : 8;
+  const d0 = Math.hypot(goal.x - hx, goal.y - hy);
+  const closingSoon = room.tick + 200 >= shrinkAtTicks(room);
+  const span = Math.max(room.bounds.x1 - room.bounds.x0, room.bounds.y1 - room.bounds.y0);
+
+  // 2. Score every candidate path
+  const evaluate = (rel, speed) => {
+    const target = p.angle + rel;
+    const r = simulate(room, world, p, target, speed, steps);
+    if (r.ttc <= steps) {
+      // Every path is risky: survive longest, and among equals prefer the one with more room around it
+      const room2 = r.ttc > 2 ? freeSpace(room, world, r.x, r.y, r.ttc) : 0;
+      return { rel, speed, r, score: -1000 + r.ttc * 25 + room2 * 20 - Math.abs(rel) * 2 };
+    }
+    const space = freeSpace(room, world, r.x, r.y, steps);
+    let score = space * 60;
+    if (space < 0.35) score -= (0.35 - space) * 400; // about to be boxed in
+    score += r.food * 4;
+    const progress = (d0 - Math.hypot(goal.x - r.x, goal.y - r.y)) / (speed * steps * DT);
+    score += progress * goalW;
+    if (closingSoon) score -= (Math.hypot(r.x - cx, r.y - cy) / span) * 30;
+    score -= Math.abs(rel) * 3;
+    return { rel, speed, r, score };
+  };
+
+  let best = null;
+  for (const rel of REL_ANGLES) {
+    const o = evaluate(rel, SPEED);
+    if (!best || o.score > best.score) best = o;
+  }
+
+  // 3. Boost on purpose: to finish a cut-off, to escape, or (Hard) to grab nearby gold first
+  const canBoost = p.body.length > MIN_BOOST_LENGTH + 6;
+  let boost = false;
+  if (canBoost) {
+    const inDanger = best.r.ttc <= steps;
+    const wantRush = (attacking && d0 < 220) || inDanger // boost only for the final approach of a cut-off
+      || (cfg.foodRush && food && p.body.length > 35 && d0 < 160 && food.value > 6 / (d0 + 60));
+    if (wantRush) {
+      let bestB = null;
+      for (const rel of REL_ANGLES) {
+        const o = evaluate(rel, BOOST_SPEED);
+        if (!bestB || o.score > bestB.score) bestB = o;
+      }
+      // Escape: take the boost path if it survives longer; attack/rush: only if it's at least as safe
+      if (inDanger ? bestB.r.ttc > best.r.ttc : bestB.r.ttc > steps && bestB.score >= best.score - 5) {
+        best = bestB;
+        boost = true;
+      }
+    }
+  }
+
+  p.target = wrapAngle(p.angle + best.rel);
+  p.boost = boost;
+}
+
+function botThink(room, world, p) {
+  const skill = p.isBot ? p.skill : 'normal'; // autopilot for disconnected players plays at Normal
+  if (skill === 'easy') botThinkEasy(room, world.grid, p);
+  else botThinkPlanner(room, world, p, skill);
+}
+
 function spawnPowerup(room) {
   const max = 2 + Math.floor(room.startedWith / 3);
   if (room.powerups.length >= max) return;
@@ -415,11 +678,17 @@ function step(room) {
   room.tick += 1;
   const alive = alivePlayers(room);
 
-  // 0. Bots (and disconnected players' autopilot) decide where to go, 10x per second
-  if (room.tick % 2 === 0) {
-    const grid0 = buildGrid(room);
-    for (const p of alive) if (p.isBot || !p.connected) botThink(room, grid0, p);
-  }
+  // 0. Bots (and disconnected players' autopilot) decide where to go.
+  //    Easy/Normal think 10x per second, Hard 20x; thinking is staggered across bots.
+  let world = null;
+  alive.forEach((p, i) => {
+    if (!p.isBot && p.connected) return;
+    const skill = p.isBot ? p.skill : 'normal';
+    const every = SKILLS[skill] ? SKILLS[skill].every : 2;
+    if ((room.tick + i) % every !== 0) return;
+    world = world || botWorld(room, buildGrid(room));
+    botThink(room, world, p);
+  });
 
   // 1. Steer toward the target angle (limited turn rate) and move
   for (const p of alive) {
@@ -488,7 +757,7 @@ function step(room) {
       const pull = Math.min(d, 12);
       o.x += ((hx - o.x) / d) * pull;
       o.y += ((hy - o.y) / d) * pull;
-      room.orbAdds.set(id, o);
+      moveOrb(room, id, o);
     }
   }
 
@@ -604,6 +873,7 @@ function snapshot(room, mode) {
       color: p.color,
       skin: p.skin,
       bot: p.isBot,
+      skill: p.skill,
       connected: p.connected,
       ready: p.ready,
       wins: p.wins,
@@ -636,8 +906,7 @@ function broadcast(room, mode = 'meta') {
   io.to(room.code).emit('state', snapshot(room, mode));
   if (mode === 'tick') {
     room.events = [];
-    room.orbAdds = new Map();
-    room.orbDels = [];
+    resetOrbDeltas(room);
     room.orbsReset = false;
   }
 }
@@ -751,11 +1020,13 @@ io.on('connection', (socket) => {
     broadcast(room);
   });
 
-  socket.on('addBot', () => {
+  socket.on('addBot', (skill) => {
     const { room } = hostCtx(socket);
     if (!room || !inLobby(room) || room.players.size >= MAX_PLAYERS) return;
     const taken = new Set([...room.players.values()].map((p) => p.name));
-    const bot = newPlayer(room, { name: BOT_NAMES.find((n) => !taken.has(n)) || 'Bot', isBot: true });
+    // New bots copy the last skill the host picked, so "Add bot" x3 after choosing Hard gives three Hard bots
+    const s = BOT_SKILLS.includes(skill) ? skill : room.botSkill || 'normal';
+    const bot = newPlayer(room, { name: BOT_NAMES.find((n) => !taken.has(n)) || 'Bot', isBot: true, skill: s });
     room.players.set(bot.token, bot);
     broadcast(room);
   });
@@ -765,6 +1036,16 @@ io.on('connection', (socket) => {
     if (!room || !inLobby(room)) return;
     const bot = [...room.players.values()].find((p) => p.isBot && p.id === id);
     if (bot) { room.players.delete(bot.token); broadcast(room); }
+  });
+
+  socket.on('botSkill', ({ id, skill } = {}) => {
+    const { room } = hostCtx(socket);
+    if (!room || !inLobby(room) || !BOT_SKILLS.includes(skill)) return;
+    const bot = [...room.players.values()].find((p) => p.isBot && p.id === id);
+    if (!bot) return;
+    bot.skill = skill;
+    room.botSkill = skill;
+    broadcast(room);
   });
 
   socket.on('ready', (on) => {

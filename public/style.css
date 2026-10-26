@@ -150,6 +150,10 @@ input:focus { border-color: var(--accent); }
 .tag.ready { color: var(--accent); border-color: rgba(57, 255, 136, .4); }
 .tag.host { color: var(--gold); border-color: rgba(255, 210, 63, .4); }
 .tag.bot { color: var(--cyan); border-color: rgba(77, 210, 255, .4); }
+.tag.skill { background: none; font-family: inherit; cursor: pointer; }
+.tag.skill:hover { border-color: currentColor; }
+.tag.bot.easy { color: #9effc8; border-color: rgba(158, 255, 200, .4); }
+.tag.bot.hard { color: var(--danger); border-color: rgba(255, 77, 109, .45); }
 .tag.off { color: var(--danger); border-color: rgba(255, 77, 109, .4); }
 .x-btn { background: none; border: 0; color: var(--muted); font-size: 16px; cursor: pointer; padding: 0 2px; line-height: 1; }
 .x-btn:hover { color: var(--danger); }
