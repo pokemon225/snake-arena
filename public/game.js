@@ -250,6 +250,15 @@ $('copyBtn').onclick = async () => {
 
 const BOT_SKILLS = ['easy', 'normal', 'hard'];
 const SKIN_LABELS = { solid: 'Solid', stripes: 'Stripes', dots: 'Dots', neon: 'Neon' };
+const MODE_LABELS = { rounds: 'Rounds', endless: 'Endless' };
+
+const isEndless = () => state && state.settings.mode === 'endless';
+const wallsClosing = () => !isEndless() && state.phase === 'playing' && state.tick >= state.shrinkAt;
+
+// Endless ranking: current score (= length) first, best length breaks ties
+function ranked() {
+  return [...state.players].sort((a, b) => b.length - a.length || b.stats.maxLen - a.stats.maxLen);
+}
 const ARENA_LABELS = { small: 'Small', medium: 'Medium', large: 'Large' };
 
 function segmented(container, options, current, label, onPick, disabled) {
@@ -303,9 +312,14 @@ function renderLobby() {
     $('readyBtn').textContent = m.ready ? 'Ready ✓ (tap to undo)' : "I'm ready";
     $('readyBtn').classList.toggle('off', !!m.ready);
   }
+  const endless = state.settings.mode === 'endless';
   if (host) {
-    $('startBtn').textContent = state.players.length < 2 ? 'Start practice (solo)' : `Start match (${state.players.length} snakes)`;
-    $('lobbyHint').textContent = state.players.length < 2
+    $('startBtn').textContent = endless
+      ? `Start endless game (${state.players.length} snake${state.players.length > 1 ? 's' : ''})`
+      : state.players.length < 2 ? 'Start practice (solo)' : `Start match (${state.players.length} snakes)`;
+    $('lobbyHint').textContent = endless && state.players.length < 2
+      ? 'Endless works solo too — add bots or invite friends to climb the ranking.'
+      : state.players.length < 2
       ? 'Playing alone is practice. Add a bot or invite friends for a real match.'
       : notReady ? `Waiting on ${notReady} player${notReady > 1 ? 's' : ''} to ready up — you can start anyway.` : 'Everyone is ready!';
   } else {
@@ -329,6 +343,9 @@ function renderLobby() {
   const st = state.settings;
   $('settingsNote').textContent = host ? '' : '(host decides)';
   const set = (patch) => socket.emit('settings', { ...st, ...patch });
+  segmented($('setMode'), cfg.modes, st.mode, (v) => MODE_LABELS[v], (v) => set({ mode: v }), !host);
+  $('roundSettings').classList.toggle('hidden', endless);
+  $('endlessNote').classList.toggle('hidden', !endless);
   segmented($('setWins'), cfg.winsOptions, st.winsToMatch, (v) => String(v), (v) => set({ winsToMatch: v }), !host);
   segmented($('setArena'), cfg.arenas, st.arena, (v) => ARENA_LABELS[v], (v) => set({ arena: v }), !host);
   segmented($('setShrink'), cfg.shrinkOptions, st.shrinkAfter, (v) => `${v}s`, (v) => set({ shrinkAfter: v }), !host);
@@ -431,6 +448,14 @@ function handleEvent(ev) {
       sfx.ko();
     }
     if (p && ev.id !== myId && ev.killerId !== myId) beep(220, 0.12, 'sawtooth', 0.025);
+  } else if (ev.type === 'respawn') {
+    // Endless: the new snake is already in this state, so show where you came back
+    const p = state.players.find((q) => q.id === ev.id);
+    if (p && p.body.length) {
+      ring(p.body[0], p.body[1], p.color);
+      if (ev.id === myId) popup(p.body[0], p.body[1] - 34, `RESPAWN · ${ev.from} → ${ev.to}`, '#fff', true);
+    }
+    if (ev.id === myId) { prevBodies.delete(myId); shownScore = ev.to; }
   } else if (ev.type === 'shield') {
     ring(ev.x, ev.y, '#4dd2ff');
     burst(ev.x, ev.y, '#4dd2ff', 24, 180);
@@ -457,11 +482,16 @@ function addFeed(ev) {
 
 function renderHud() {
   $('hudCode').textContent = state.code;
-  $('hudRound').textContent = `Round ${state.round}`;
-  $('winsTo').textContent = state.settings.winsToMatch;
+  const endless = isEndless();
+  $('hudRound').textContent = endless ? 'Endless' : `Round ${state.round}`;
+  $('boardLabel').textContent = endless ? 'Ranking' :`First to ${state.settings.winsToMatch} round wins`;
+  $('endBtn').classList.toggle('hidden', !(endless && isHost() && (state.phase === 'playing' || state.phase === 'countdown')));
+  renderScorePanel();
   const status = $('hudStatus');
   status.classList.remove('danger');
-  if (state.phase === 'playing') {
+  if (endless && state.phase === 'playing') {
+    status.textContent = window.innerWidth <= 760 ? 'Crash = respawn ½' : 'Crash = respawn with half your score';
+  } else if (state.phase === 'playing') {
     const left = Math.ceil(((state.shrinkAt - state.tick) * cfg.tickMs) / 1000);
     if (left > 0) {
       status.textContent = `Walls close in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, '0')}`;
@@ -490,7 +520,39 @@ function renderHud() {
   $('effects').replaceChildren(...chips);
 }
 
+// Endless mode: live ranking top-left over the arena, "1. Name: score"
+let shownScore = 0;
+function renderScorePanel() {
+  const panel = $('scorePanel');
+  const m = me();
+  const on = isEndless() && m && (state.phase === 'playing' || state.phase === 'countdown');
+  panel.classList.toggle('hidden', !on);
+  if (!on) return;
+  const grew = m.length > shownScore;
+  shownScore = m.length;
+  $('spList').replaceChildren(...ranked().map((p, i) => {
+    const mine = p.id === myId;
+    const pts = el('span', { className: 'sp-pts' + (mine && grew ? ' bump' : ''), textContent: p.length });
+    return el('li', { className: (mine ? 'me' : '') + (i === 0 ? ' first' : '') }, [
+      el('span', { className: 'sp-name', style: `color:${p.color}`, textContent: `${i + 1}. ${p.name}${mine ? ' (you)' : ''}:` }),
+      pts,
+    ]);
+  }));
+}
+
 function renderScores() {
+  if (isEndless()) {
+    $('scoreList').replaceChildren(...ranked().map((p, i) => {
+      const status = !p.connected && !p.bot ? 'offline · autopilot' : `best ${Math.max(p.stats.maxLen, p.length)} · ${p.stats.kills} KO`;
+      return el('li', { className: p.id === myId ? 'me' : '' }, [
+        el('span', { className: 'swatch', style: `background:${p.color};color:${p.color}` }),
+        el('span', { className: 'name' }, [el('span', { className: 'rank', textContent: `#${i + 1}` }), p.name + (p.id === myId ? ' (you)' : '')]),
+        el('span', { className: 'pts', textContent: p.length }),
+        el('span', { className: 'sub', textContent: status }),
+      ]);
+    }));
+    return;
+  }
   const sorted = [...state.players].sort((a, b) => b.wins - a.wins || b.length - a.length);
   $('scoreList').replaceChildren(...sorted.map((p) => {
     let status = p.alive ? `length ${p.length}` : p.inRound ? 'out' : 'next round';
@@ -505,16 +567,19 @@ function renderScores() {
 }
 
 function statsTable() {
-  const rows = [...state.players].sort((a, b) => b.wins - a.wins || b.stats.kills - a.stats.kills);
+  const endless = isEndless();
+  const rows = [...state.players].sort(endless
+    ? (a, b) => b.finalScore - a.finalScore || b.stats.maxLen - a.stats.maxLen
+    : (a, b) => b.wins - a.wins || b.stats.kills - a.stats.kills);
   const secs = (p) => Math.round((p.stats.aliveTicks * cfg.tickMs) / 1000);
   const max = (f) => Math.max(...rows.map(f));
   const best = { kills: max((p) => p.stats.kills), len: max((p) => p.stats.maxLen), time: max(secs), eaten: max((p) => p.stats.eaten) };
   const cell = (v, isBest, suffix = '') => el('td', { className: isBest && v > 0 ? 'best' : '', textContent: `${v}${suffix}` });
   const table = el('table', { className: 'stats' }, [
-    el('thead', {}, el('tr', {}, ['Player', 'Wins', 'KOs', 'Longest', 'Survived', 'Orbs'].map((h) => el('th', { textContent: h })))),
-    el('tbody', {}, rows.map((p) => el('tr', { className: p.id === myId ? 'me' : '' }, [
-      el('td', {}, [el('span', { className: 'swatch', style: `display:inline-block;margin-right:6px;background:${p.color};color:${p.color}` }), p.name]),
-      el('td', { textContent: p.wins }),
+    el('thead', {}, el('tr', {}, ['Player', endless ? 'Score' : 'Wins', 'KOs', 'Longest', endless ? 'Played' : 'Survived', 'Orbs'].map((h) => el('th', { textContent: h })))),
+    el('tbody', {}, rows.map((p, i) => el('tr', { className: p.id === myId ? 'me' : '' }, [
+      el('td', {}, [endless ? `#${i + 1} ` : '', el('span', { className: 'swatch', style: `display:inline-block;margin-right:6px;background:${p.color};color:${p.color}` }), p.name]),
+      el('td', { textContent: endless ? p.finalScore : p.wins }),
       cell(p.stats.kills, p.stats.kills === best.kills),
       cell(p.stats.maxLen, p.stats.maxLen === best.len),
       cell(secs(p), secs(p) === best.time, 's'),
@@ -525,7 +590,8 @@ function statsTable() {
   const awards = el('div', { className: 'awards' });
   if (best.kills > 0) awards.append(el('span', { textContent: `⚔ Most KOs: ${pick((p) => p.stats.kills).name}` }));
   awards.append(el('span', { textContent: `🐍 Longest snake: ${pick((p) => p.stats.maxLen).name}` }));
-  awards.append(el('span', { textContent: `⏱ Survivor: ${pick(secs).name}` }));
+  if (endless) awards.append(el('span', { textContent: `🛡 Fewest deaths: ${rows.reduce((a, b) => (b.stats.deaths < a.stats.deaths ? b : a)).name}` }));
+  else awards.append(el('span', { textContent: `⏱ Survivor: ${pick(secs).name}` }));
   return [awards, table];
 }
 
@@ -564,12 +630,12 @@ function renderOverlay() {
     mode = 'match';
     const btns = host
       ? el('div', { className: 'row' }, [
-        el('button', { className: 'btn primary', textContent: 'Rematch', onclick: () => socket.emit('start') }),
+        el('button', { className: 'btn primary', textContent: r.endless ? 'Play again' : 'Rematch', onclick: () => socket.emit('start') }),
         el('button', { className: 'btn', textContent: 'Back to lobby', onclick: () => socket.emit('toLobby') }),
       ])
       : el('div', { className: 'sub', textContent: 'Waiting for the host to start a rematch…' });
     content = [
-      el('div', { className: 'title', textContent: `🏆 ${r.winner.name} wins the match!`, style: `color:${r.winner.color}` }),
+      el('div', { className: 'title', textContent: r.endless ? `🏆 ${r.winner.name} wins with ${r.winner.score}!` : `🏆 ${r.winner.name} wins the match!`, style: `color:${r.winner.color}` }),
       ...statsTable(),
       btns,
       el('button', { className: 'btn ghost small', textContent: 'Leave room', onclick: leave }),
@@ -701,7 +767,10 @@ function updateSteering(now, myHead) {
   sendSteer(desiredAngle, now);
 }
 
-$('helpBtn').onclick = () => $('rulesModal').classList.remove('hidden');
+$('endBtn').onclick = () => {
+  if (confirm('End the endless game for everyone? The biggest snake right now wins.')) socket.emit('endGame');
+};
+$('helpBtn').onclick =() => $('rulesModal').classList.remove('hidden');
 $('rulesModal').addEventListener('click', (e) => { if (e.target === $('rulesModal')) $('rulesModal').classList.add('hidden'); });
 
 // ---------- Client-side prediction ----------
@@ -983,7 +1052,7 @@ function drawMinimap(snakes, now) {
   ctx.fillRect(x0, y0 + b.y1 * ms, mw, mh - b.y1 * ms);
   ctx.fillRect(x0, y0 + b.y0 * ms, b.x0 * ms, (b.y1 - b.y0) * ms);
   ctx.fillRect(x0 + b.x1 * ms, y0 + b.y0 * ms, mw - b.x1 * ms, (b.y1 - b.y0) * ms);
-  ctx.strokeStyle = state.phase === 'playing' && state.tick >= state.shrinkAt ? '#ff4d6d' : '#3a4b60';
+  ctx.strokeStyle = wallsClosing() ? '#ff4d6d' : '#3a4b60';
   ctx.lineWidth = 1;
   ctx.strokeRect(x0 + b.x0 * ms + 0.5, y0 + b.y0 * ms + 0.5, (b.x1 - b.x0) * ms - 1, (b.y1 - b.y0) * ms - 1);
 
@@ -1132,7 +1201,7 @@ function draw(now) {
   }
 
   // Arena border
-  const closing = playing && state.tick >= state.shrinkAt;
+  const closing = wallsClosing();
   ctx.strokeStyle = closing ? `rgba(255,77,109,${0.6 + 0.4 * Math.sin(now / 120)})` : '#2b3a4d';
   ctx.lineWidth = (closing ? 3 : 2) * px;
   ctx.strokeRect(b.x0, b.y0, b.x1 - b.x0, b.y1 - b.y0);

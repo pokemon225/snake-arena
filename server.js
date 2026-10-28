@@ -34,6 +34,9 @@ const RECONNECT_GRACE_MS = 30000;
 const GRID = 40; // spatial hash cell size
 
 const ARENAS = { small: [1600, 1080], medium: [2400, 1600], large: [3200, 2140] };
+const MODES = ['rounds', 'endless'];
+const ENDLESS_ARENA = 'large';
+const SPAWN_PROTECT_TICKS = Math.round(2000 / TICK_MS); // endless: can't collide right after respawning
 const WINS_OPTIONS = [1, 3, 5];
 const SHRINK_OPTIONS = [30, 60, 90];
 const COLORS = ['#39ff88', '#ff4d6d', '#4dd2ff', '#ffd23f', '#c77dff', '#ff8c42', '#f15bb5', '#f0f0f0'];
@@ -52,7 +55,7 @@ const POWER_EVERY_TICKS = Math.round(6000 / TICK_MS);
 const MAGNET_RANGE = 180;
 const INVULN_TICKS = Math.round(1000 / TICK_MS);
 
-const CONFIG = { tickMs: TICK_MS, seg: SEG, radius: RADIUS, orbR: ORB_R, speed: SPEED, boostSpeed: BOOST_SPEED, turnRate: TURN_RATE, minBoost: MIN_BOOST_LENGTH, maxPlayers: MAX_PLAYERS, colors: COLORS, skins: SKINS, arenas: Object.keys(ARENAS), winsOptions: WINS_OPTIONS, shrinkOptions: SHRINK_OPTIONS };
+const CONFIG = { tickMs: TICK_MS, seg: SEG, radius: RADIUS, orbR: ORB_R, speed: SPEED, boostSpeed: BOOST_SPEED, turnRate: TURN_RATE, minBoost: MIN_BOOST_LENGTH, maxPlayers: MAX_PLAYERS, colors: COLORS, skins: SKINS, arenas: Object.keys(ARENAS), modes: MODES, winsOptions: WINS_OPTIONS, shrinkOptions: SHRINK_OPTIONS };
 
 const rooms = new Map();
 const newId = () => crypto.randomBytes(6).toString('hex');
@@ -94,7 +97,7 @@ function createRoom() {
     hostToken: null,
     phase: 'lobby', // lobby | countdown | playing | roundover | matchover
     phaseEndsAt: 0,
-    settings: { winsToMatch: 3, arena: 'medium', shrinkAfter: 60 },
+    settings: { mode: 'rounds', winsToMatch: 3, arena: 'medium', shrinkAfter: 60 },
     w: ARENAS.medium[0],
     h: ARENAS.medium[1],
     round: 0,
@@ -132,7 +135,7 @@ function newPlayer(room, { name, isBot = false, skill = 'normal' }) {
     skin: isBot ? SKINS[Math.floor(Math.random() * SKINS.length)] : 'solid',
     ready: isBot,
     wins: 0,
-    stats: { kills: 0, maxLen: 0, aliveTicks: 0, eaten: 0, powerups: 0 },
+    stats: freshStats(),
     body: [],
     angle: 0,
     target: 0,
@@ -148,6 +151,12 @@ function newPlayer(room, { name, isBot = false, skill = 'normal' }) {
     invuln: 0,
   };
 }
+
+function freshStats() {
+  return { kills: 0, maxLen: 0, aliveTicks: 0, eaten: 0, powerups: 0, deaths: 0 };
+}
+
+const isEndless = (room) => room.settings.mode === 'endless';
 
 function hostPlayer(room) {
   return room.players.get(room.hostToken);
@@ -238,17 +247,34 @@ function spawnSnakes(room) {
   });
 }
 
+// Endless mode: drop a snake into the safest open spot, facing the middle.
+// Only the first few points are laid out; the rest start stacked on the tail and
+// uncoil as the snake moves, so even a very long snake fits anywhere.
+function spawnOne(room, p, length) {
+  const b = room.bounds;
+  const spot = freeSpot(room, 260, 320) || freeSpot(room, 160, 160) || [(b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2];
+  const [hx, hy] = spot;
+  const facing = Math.atan2((b.y0 + b.y1) / 2 - hy, (b.x0 + b.x1) / 2 - hx);
+  p.body = [];
+  for (let k = 0; k < length; k++) {
+    const d = SEG * Math.min(k, START_LENGTH - 1);
+    p.body.push([hx - Math.cos(facing) * d, hy - Math.sin(facing) * d]);
+  }
+  Object.assign(p, { angle: facing, target: facing, boost: false, boosting: false, boostTicks: 0, grow: 0, alive: true, inRound: true, magnet: 0, ghost: 0, shield: false, invuln: SPAWN_PROTECT_TICKS });
+}
+
 function startMatch(room) {
   room.round = 0;
   for (const p of room.players.values()) {
     p.wins = 0;
-    p.stats = { kills: 0, maxLen: 0, aliveTicks: 0, eaten: 0, powerups: 0 };
+    p.finalScore = 0;
+    p.stats = freshStats();
   }
   startRound(room);
 }
 
 function startRound(room) {
-  const [W, H] = ARENAS[room.settings.arena];
+  const [W, H] = ARENAS[isEndless(room) ? ENDLESS_ARENA : room.settings.arena];
   room.w = W;
   room.h = H;
   room.round += 1;
@@ -276,6 +302,7 @@ function killSnake(room, p, cause, killer) {
   });
   const credited = killer && killer !== p ? killer : null;
   if (credited) credited.stats.kills += 1;
+  p.stats.deaths += 1;
   room.events.push({ type: 'death', id: p.id, name: p.name, color: p.color, cause, x: Math.round(hx), y: Math.round(hy), killer: credited ? credited.name : null, killerId: credited ? credited.id : null });
 }
 
@@ -676,6 +703,7 @@ function spawnPowerup(room) {
 
 function step(room) {
   room.tick += 1;
+  if (isEndless(room)) room.startedWith = room.players.size; // orb/power-up density follows who's playing
   const alive = alivePlayers(room);
 
   // 0. Bots (and disconnected players' autopilot) decide where to go.
@@ -744,7 +772,14 @@ function step(room) {
       room.events.push({ type: 'shield', id: p.id, x: Math.round(p.body[0][0]), y: Math.round(p.body[0][1]) });
       continue;
     }
+    const score = p.body.length;
     killSnake(room, p, cause, killer);
+    if (isEndless(room)) {
+      // Endless: back in immediately, keeping half the score
+      const keep = Math.max(START_LENGTH, Math.floor(score / 2));
+      spawnOne(room, p, keep);
+      room.events.push({ type: 'respawn', id: p.id, from: score, to: keep });
+    }
   }
 
   // 3. Magnets pull nearby orbs in
@@ -792,10 +827,19 @@ function step(room) {
   checkRoundEnd(room);
 }
 
-const shrinkAtTicks = (room) => Math.round((room.settings.shrinkAfter * 1000) / TICK_MS);
+const shrinkAtTicks = (room) => (isEndless(room) ? Infinity : Math.round((room.settings.shrinkAfter * 1000) / TICK_MS));
+
+// Endless: the host ends the game; the biggest snake right now wins
+function endEndless(room) {
+  const ranked = [...room.players.values()].sort((a, b) => b.body.length * b.alive - a.body.length * a.alive || b.stats.maxLen - a.stats.maxLen);
+  for (const p of room.players.values()) p.finalScore = p.alive ? p.body.length : 0;
+  const w = ranked[0];
+  room.lastResult = { endless: true, match: true, winner: w ? { id: w.id, name: w.name, color: w.color, score: w.finalScore } : null };
+  room.phase = 'matchover';
+}
 
 function checkRoundEnd(room) {
-  if (room.phase !== 'playing') return;
+  if (room.phase !== 'playing' || isEndless(room)) return;
   const alive = alivePlayers(room);
   const practice = room.startedWith < 2;
   if (practice ? alive.length > 0 : alive.length > 1) return;
@@ -862,7 +906,7 @@ function snapshot(room, mode) {
     round: room.round,
     tick: room.tick,
     settings: room.settings,
-    shrinkAt: shrinkAtTicks(room),
+    shrinkAt: isEndless(room) ? null : shrinkAtTicks(room),
     w: room.w,
     h: room.h,
     bounds: { x0: Math.round(b.x0), y0: Math.round(b.y0), x1: Math.round(b.x1), y1: Math.round(b.y1) },
@@ -877,6 +921,7 @@ function snapshot(room, mode) {
       connected: p.connected,
       ready: p.ready,
       wins: p.wins,
+      finalScore: p.finalScore || 0,
       stats: p.stats,
       alive: p.alive,
       inRound: p.inRound,
@@ -954,6 +999,8 @@ function joinRoom(socket, room, name) {
   const p = newPlayer(room, { name });
   room.players.set(p.token, p);
   if (!room.hostToken) room.hostToken = p.token;
+  // Endless games never stop between rounds, so late joiners jump straight in
+  if (isEndless(room) && (room.phase === 'playing' || room.phase === 'countdown')) spawnOne(room, p, START_LENGTH);
   attach(socket, room, p);
 }
 
@@ -1000,6 +1047,14 @@ io.on('connection', (socket) => {
     startMatch(room);
   });
 
+  socket.on('endGame', () => {
+    const { room } = hostCtx(socket);
+    if (!room || !isEndless(room) || (room.phase !== 'playing' && room.phase !== 'countdown')) return;
+    endEndless(room);
+    broadcast(room, 'tick');
+    stopLoop(room);
+  });
+
   socket.on('toLobby', () => {
     const { room } = hostCtx(socket);
     if (!room || room.phase !== 'matchover') return;
@@ -1014,6 +1069,7 @@ io.on('connection', (socket) => {
   socket.on('settings', (s = {}) => {
     const { room } = hostCtx(socket);
     if (!room || !inLobby(room)) return;
+    if (MODES.includes(s.mode)) room.settings.mode = s.mode;
     if (WINS_OPTIONS.includes(s.winsToMatch)) room.settings.winsToMatch = s.winsToMatch;
     if (ARENAS[s.arena]) room.settings.arena = s.arena;
     if (SHRINK_OPTIONS.includes(s.shrinkAfter)) room.settings.shrinkAfter = s.shrinkAfter;

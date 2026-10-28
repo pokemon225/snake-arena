@@ -16,6 +16,13 @@ Real-time multiplayer snake you play in the browser, on any device. Create a roo
 - **Sudden death:** After a while (30/60/90s, set by the host) the walls close in.
 - **Win:** Last snake alive wins the round. First to 1/3/5 round wins (set by the host) takes the match.
 
+## Endless mode
+The host can pick **Endless** in the lobby instead of Rounds.
+- It always uses the large arena, with no rounds and no closing walls.
+- **Crash and you respawn instantly with half your score** (minimum 14), with 2 seconds of spawn protection.
+- The top-left corner shows a **live ranking** of every player and their score (snake length), like `1. Ada: 50`, with your own row marked "(you)".
+- Friends can join in the middle of a game. The host clicks **End game** to finish, and the biggest snake wins.
+
 ## Features
 - 2–8 players per room. Join by code or invite link. Bots (Easy / Normal / Hard) can fill the empty slots.
 - **Lobby:** pick your color and pattern (solid, stripes, dots, neon), and ready up. The host chooses the rounds to win, the arena size, and when the walls close.

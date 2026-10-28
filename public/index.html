@@ -63,9 +63,13 @@
       </div>
       <div class="card">
         <p class="label">Match settings <span id="settingsNote" class="note"></span></p>
-        <div class="setting"><span>Rounds to win</span><div class="segmented" id="setWins"></div></div>
-        <div class="setting"><span>Arena size</span><div class="segmented" id="setArena"></div></div>
-        <div class="setting"><span>Walls close after</span><div class="segmented" id="setShrink"></div></div>
+        <div class="setting"><span>Mode</span><div class="segmented" id="setMode"></div></div>
+        <div id="roundSettings">
+          <div class="setting"><span>Rounds to win</span><div class="segmented" id="setWins"></div></div>
+          <div class="setting"><span>Arena size</span><div class="segmented" id="setArena"></div></div>
+          <div class="setting"><span>Walls close after</span><div class="segmented" id="setShrink"></div></div>
+        </div>
+        <p id="endlessNote" class="hint endless-note hidden">Large arena, no rounds, no closing walls. Crash and you respawn instantly with <b>half your score</b>. Score = snake length; your rank is shown top-left. The host ends the game whenever they like — biggest snake wins.</p>
       </div>
     </div>
     <div class="card rules" id="rulesLobby"></div>
@@ -81,6 +85,7 @@
       </div>
       <div class="hud-center" id="hudStatus"></div>
       <div class="hud-right">
+        <button class="btn small end-btn hidden" id="endBtn" title="End the endless game for everyone">End game</button>
         <button class="icon-btn" id="soundBtn" aria-label="Toggle sound" title="Sound">🔊</button>
         <button class="icon-btn" id="fullBtn" aria-label="Full screen" title="Full screen">⛶</button>
         <button class="icon-btn" id="helpBtn" aria-label="Show rules" title="Rules">?</button>
@@ -89,14 +94,20 @@
     <div class="game-body">
       <div class="stage" id="stage">
         <canvas id="canvas"></canvas>
-        <div id="effects" class="effects"></div>
+        <div class="top-left">
+          <div id="scorePanel" class="score-panel hidden">
+            <div class="sp-title">Ranking</div>
+            <ol id="spList" class="sp-list"></ol>
+          </div>
+          <div id="effects" class="effects"></div>
+        </div>
         <div id="banner" class="banner hidden"></div>
         <div id="overlay" class="overlay hidden"></div>
         <div id="feed" class="feed"></div>
         <button id="boostBtn" class="boost-btn">BOOST</button>
       </div>
       <aside class="scoreboard">
-        <p class="label">First to <span id="winsTo">3</span> round wins</p>
+        <p class="label" id="boardLabel">First to 3 round wins</p>
         <ul id="scoreList"></ul>
       </aside>
     </div>
@@ -118,6 +129,7 @@
       <li><b>Cut them off:</b> When a snake dies it bursts into orbs. Swing your body in front of a rival to make them crash into you.</li>
       <li><b>Sudden death:</b> After a while the walls close in. Anything caught in the wall gets chopped off.</li>
       <li><b>Win:</b> Last snake alive wins the round. First to the target number of round wins takes the match.</li>
+      <li><b>Endless mode:</b> No rounds and no closing walls, on a large arena. Crash and you respawn right away with half your score. The top-left shows a live ranking of everyone's score (snake length). When the host ends the game, the biggest snake wins.</li>
     </ol>
     <p class="hint">2–8 players. Add bots in the lobby to practice or fill the arena (the host can click a bot's tag to set Easy, Normal or Hard). If your connection drops, you have 30 seconds to come back — autopilot steers for you meanwhile.</p>
   </template>

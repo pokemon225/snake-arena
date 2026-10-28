@@ -264,7 +264,30 @@ canvas { display: block; border-radius: 10px; }
 #scoreList .stars { color: var(--gold); letter-spacing: 2px; font-size: 13px; }
 #scoreList .sub { grid-column: 2 / 4; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
-.effects { position: absolute; left: 22px; top: 22px; display: flex; gap: 6px; pointer-events: none; }
+.top-left { position: absolute; left: 22px; top: 22px; display: grid; gap: 8px; justify-items: start; pointer-events: none; z-index: 2; }
+.effects { display: flex; gap: 6px; }
+
+/* Endless mode: score + rank */
+.score-panel {
+  min-width: 150px;
+  background: rgba(11, 15, 20, .82);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 10px 14px;
+  backdrop-filter: blur(3px);
+}
+.sp-title { font-size: 11px; font-weight: 800; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); margin-bottom: 6px; }
+.sp-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 3px; }
+.sp-list li { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; font-size: 14px; font-weight: 700; padding: 2px 6px; margin: 0 -6px; border-radius: 6px; }
+.sp-list li.me { background: rgba(57, 255, 136, .16); outline: 1px solid rgba(57, 255, 136, .45); font-weight: 800; }
+.sp-list li.first .sp-pts { color: var(--gold); }
+.sp-name { max-width: 170px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sp-pts { color: #fff; font-variant-numeric: tabular-nums; transition: transform .15s; }
+.sp-pts.bump { transform: scale(1.2); }
+.end-btn { padding: 6px 12px; border-color: rgba(255, 77, 109, .5); color: #ffb3c0; }
+.endless-note { margin: 4px 0 0; }
+#scoreList .rank { color: var(--muted); font-weight: 800; margin-right: 4px; }
+#scoreList .pts { color: var(--accent); font-weight: 800; font-size: 13px; }
 .chip {
   font-size: 12px; font-weight: 800;
   padding: 5px 9px;
@@ -369,7 +392,13 @@ canvas { display: block; border-radius: 10px; }
   #hudCode { display: none; }
   .hud { grid-template-columns: auto 1fr auto; }
   .overlay { inset: 6px; }
-  .effects { left: 14px; top: 14px; }
+  .top-left { left: 14px; top: 14px; }
+  .score-panel { min-width: 0; padding: 7px 10px; }
+  .sp-title { font-size: 10px; margin-bottom: 3px; }
+  .sp-list { gap: 1px; }
+  .sp-list li { font-size: 12px; gap: 8px; }
+  .sp-name { max-width: 120px; }
+  .end-btn { padding: 5px 8px; font-size: 12px; }
   .banner { top: 14px; }
   .feed { left: 14px; bottom: 14px; }
   .logo { font-size: 28px; }
